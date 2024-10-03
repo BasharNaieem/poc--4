@@ -1,22 +1,43 @@
 ---
 - name: Setup Jenkins
-  hosts: all
+  hosts: Jenkins
   become: true
   vars:
     jenkins_url: "http://localhost:8080"
+    jenkins_host: "localhost"
+    password: "bashar"
     username: "bashar"
-    new_password: "1234"
-    fullname: "BasharNaieem"
+    fullname: "basharnaieem"
     email: "hello@world.com"
-    job_name: "ansible-demo-job"
+    pipeline_job_name: "ansible_new"
     job_config_xml_path: "/tmp/job-config.xml"
     jenkins_crumb_url: "{{ jenkins_url }}/crumbIssuer/api/xml?xpath=concat(//crumbRequestField,%22:%22,//crumb)"
+    repo_url: "https://github.com/yugannkt/CI-CD-AutomationSuite.git"
+
+  
+    sonar_scanner_dir: "/opt/sonar-scanner"
     
   tasks:
+
+    - name: Load SonarQube credentials from JSON file
+      set_fact:
+        sonarqube_credentials: "{{ lookup('file', '/home/bashar/POC4/sonarqube_credentials.json') | from_json }}"
+    
+    - name: Set SonarQube project key and token
+      set_fact:
+        sonar_project_key: "{{ sonarqube_credentials.SONAR_PROJECT_KEY }}"
+        sonar_token: "{{ sonarqube_credentials.SONAR_TOKEN }}"
+        sonar_url : "{{sonarqube_credentials.SONARQUBE_URL}}"
+    
+    - name: Allow Jenkins user to run specific commands without a password
+      lineinfile:
+        path: /etc/sudoers
+        line: "jenkins ALL=(ALL) NOPASSWD: ALL"
+      become: true
+
     - name: Update apt repository
       apt:
         update_cache: yes
-
     - name: Install required packages
       apt:
         name:
@@ -25,18 +46,15 @@
           - gnupg
           - unzip
         state: present
-
     - name: Add Jenkins GPG key
       get_url:
         url: https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
         dest: /usr/share/keyrings/jenkins-keyring.asc
-
     - name: Add Jenkins APT repository
       lineinfile:
         path: /etc/apt/sources.list.d/jenkins.list
         line: "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/"
         create: yes
-
     - name: Update APT package index
       apt:
         update_cache: yes
@@ -45,17 +63,6 @@
       apt:
         name: jenkins
         state: present
-
-    - name: Install apache2
-      apt:
-        name: apache2
-        state: present
-
-    - name: Start apache service
-      service:
-        name: apache2
-        state: started
-        enabled: yes
 
     - name: Start Jenkins service
       service:
@@ -91,45 +98,45 @@
 
     - name: Set password variable
       set_fact:
-        password: "{{ initial_password_output.stdout }}"
+        initial_user_password: "{{ initial_password_output.stdout }}"
 
     - name: Create cookie jar
       command: mktemp
       register: cookie_jar
-
+      
     - name: Get Jenkins crumb
       shell: |
-        curl -u "admin:{{ password }}" --cookie-jar "{{ cookie_jar.stdout }}" "{{ jenkins_url }}/crumbIssuer/api/xml?xpath=concat(//crumbRequestField,%22:%22,//crumb)"
+        curl -u "admin:{{ initial_user_password }}" --cookie-jar "{{ cookie_jar.stdout }}" "{{ jenkins_url }}/crumbIssuer/api/xml?xpath=concat(//crumbRequestField,%22:%22,//crumb)"
       register: full_crumb_output
     - name: Extract only crumb
       set_fact:
         only_crumb: "{{ full_crumb_output.stdout.split(':')[1] | trim }}"
     - name: Create admin user
       shell: |
-        curl -X POST -u "admin:{{ password }}" "{{ jenkins_url }}/setupWizard/createAdminUser" \
+        curl -X POST -u "admin:{{ initial_user_password }}" "{{ jenkins_url }}/setupWizard/createAdminUser" \
           -H "Connection: keep-alive" \
           -H "Accept: application/json, text/javascript" \
           -H "X-Requested-With: XMLHttpRequest" \
           -H "{{ full_crumb_output.stdout }}" \
           -H "Content-Type: application/x-www-form-urlencoded" \
           --cookie "{{ cookie_jar.stdout }}" \
-          --data-raw "username={{ username }}&password1={{ new_password }}&password2={{ new_password }}&fullname={{ fullname }}&email={{ email }}&Jenkins-Crumb={{ only_crumb }}&json=%7B%22username%22%3A%20%22{{ username }}%22%2C%20%22password1%22%3A%20%22{{ new_password }}%22%2C%20%22password2%22%3A%20%22{{ new_password }}%22%2C%20%22fullname%22%3A%20%22{{ fullname }}%22%2C%20%22email%22%3A%20%22{{ email }}%22%2C%20%22Jenkins-Crumb%22%3A%20%22{{ only_crumb }}%22%7D"
+          --data-raw "username={{ username }}&password1={{ password }}&password2={{ password }}&fullname={{ fullname }}&email={{ email }}&Jenkins-Crumb={{ only_crumb }}&json=%7B%22username%22%3A%20%22{{ username }}%22%2C%20%22password1%22%3A%20%22{{ password }}%22%2C%20%22password2%22%3A%20%22{{ password }}%22%2C%20%22fullname%22%3A%20%22{{ fullname }}%22%2C%20%22email%22%3A%20%22{{ email }}%22%2C%20%22Jenkins-Crumb%22%3A%20%22{{ only_crumb }}%22%7D"
     - name: Install plugins
       shell: |
-        full_crumb=$(curl -u "{{ username }}:{{ new_password }}" --cookie-jar "{{ cookie_jar.stdout }}" "{{ jenkins_url }}/crumbIssuer/api/xml?xpath=concat(//crumbRequestField,%22:%22,//crumb)")
+        full_crumb=$(curl -u "{{ username }}:{{ password }}" --cookie-jar "{{ cookie_jar.stdout }}" "{{ jenkins_url }}/crumbIssuer/api/xml?xpath=concat(//crumbRequestField,%22:%22,//crumb)")
         only_crumb=$(echo "$full_crumb" | cut -d: -f2)
-        curl -X POST -u "{{ username }}:{{ new_password }}" "{{ jenkins_url }}/pluginManager/installPlugins" \
+        curl -X POST -u "{{ username }}:{{ password }}" "{{ jenkins_url }}/pluginManager/installPlugins" \
           -H "Connection: keep-alive" \
           -H "Accept: application/json, text/javascript, */*; q=0.01" \
           -H "X-Requested-With: XMLHttpRequest" \
           -H "$full_crumb" \
           -H "Content-Type: application/json" \
           --cookie "{{ cookie_jar.stdout }}" \
-          --data-raw '{"dynamicLoad":true,"plugins":["cloudbees-folder","antisamy-markup-formatter","build-timeout","credentials-binding","sonar","timestamper","ws-cleanup","ant","gradle","workflow-aggregator","github-branch-source","pipeline-github-lib","pipeline-stage-view","git","ssh-slaves","matrix-auth","pam-auth","ldap","email-ext","mailer"],"Jenkins-Crumb":"'$only_crumb'"}'
+          --data-raw '{"dynamicLoad":true,"plugins":["cloudbees-folder","github","antisamy-markup-formatter","build-timeout","credentials-binding","sonar","timestamper","ws-cleanup","ant","gradle","workflow-aggregator","pipeline-github-lib","pipeline-stage-view","git","ssh-slaves","matrix-auth","pam-auth","ldap","email-ext","mailer"],"Jenkins-Crumb":"'$only_crumb'"}'
     - name: Confirm Jenkins URL
       shell: |
         url_urlEncoded=$(python3 -c "import urllib.parse; print(urllib.parse.quote('{{ jenkins_url }}', safe=''))")
-        curl -X POST -u "{{ username }}:{{ new_password }}" "{{ jenkins_url }}/setupWizard/configureInstance" \
+        curl -X POST -u "{{ username }}:{{ password }}" "{{ jenkins_url }}/setupWizard/configureInstance" \
           -H "Connection: keep-alive" \
           -H "Accept: application/json, text/javascript, */*; q=0.01" \
           -H "X-Requested-With: XMLHttpRequest" \
@@ -140,39 +147,32 @@
     - name: Complete Jenkins setup
       debug:
         msg: "Jenkins setup complete!"
-    - name: Generate API token for the user
-      shell: |
-        full_crumb=$(curl -u "{{ username }}:{{ new_password }}" --cookie-jar "{{ cookie_jar.stdout }}" "{{ jenkins_url }}/crumbIssuer/api/xml?xpath=concat(//crumbRequestField,%22:%22,//crumb)")
-        only_crumb=$(echo "$full_crumb" | cut -d: -f2)
-        curl -X POST -u "{{ username }}:{{ new_password }}" "{{ jenkins_url }}/me/descriptorByName/jenkins.security.ApiTokenProperty/generateNewToken" \
-          -H "Connection: keep-alive" \
-          -H "Accept: application/json, text/javascript, */*; q=0.01" \
-          -H "X-Requested-With: XMLHttpRequest" \
-          -H "$full_crumb" \
-          -H "Content-Type: application/x-www-form-urlencoded" \
-          --cookie "{{ cookie_jar.stdout }}" \
-          --data-raw 'newTokenName=ansible-token'
-      register: api_token_output
-    - name: Debug raw API token output
-      debug:
-        var: api_token_output
-    - name: Extract API token
-      set_fact:
-        api_token: "{{ api_token_output.stdout | from_json | json_query('data.tokenValue') }}"
-    - name: Display the generated API token
-      debug:
-        msg: "Generated API token: {{ api_token }}"
+
+    
 
     - name: Download SonarQube Scanner
       get_url:
         url: https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-4.8.0.2856-linux.zip
         dest: /tmp/sonar-scanner.zip
-
     - name: Unzip SonarQube Scanner
       unarchive:
         src: /tmp/sonar-scanner.zip
         dest: /opt/
         remote_src: yes
+    
+    - name: Set use_embed_jre
+      lineinfile:
+        path: "/opt/sonar-scanner-4.8.0.2856-linux/bin/sonar-scanner"
+        regexp: 'use_embedded_jre=true'
+        line: 'use_embedded_jre=false'
+
+    - name: Ensure Jenkins user has ownership of the SonarScanner directory
+      ansible.builtin.command: 
+        cmd: chown -R ubuntu:ubuntu /opt/sonar-scanner-4.8.0.2856-linux/
+    
+    - name: Ensure the SonarScanner binary is executable
+      ansible.builtin.command: 
+        cmd: chmod +x /opt/sonar-scanner-4.8.0.2856-linux/bin/sonar-scanner
 
     - name: Create symlink for SonarQube Scanner
       file:
@@ -180,99 +180,78 @@
         dest: /usr/local/bin/sonar-scanner
         state: link
 
+    - name: Ensure .bashrc exists for Ubuntu user
+      lineinfile:
+        path: "/home/ubuntu/.bashrc"  # Path to the ubuntu user's .bashrc
+        create: yes  # Create the file if it does not exist
+        line: ''  # Add an empty line, just to create the file
+
+    - name: Add SonarScanner to Ubuntu user's PATH
+      lineinfile:
+        path: "/home/ubuntu/.bashrc"
+        line: 'export PATH=$PATH:/opt/sonar-scanner-4.8.0.2856-linux/bin'
+        state: present  # Ensures the line is present in the file
+
+    - name: Source the updated .bashrc for Ubuntu user
+      shell: |
+        bash -c "source /home/ubuntu/.bashrc"
+      become: yes  # Run the command as root
+      become_user: ubuntu  # Ensure the command is executed as the ubuntu user
+
+
     - name: Clean up downloaded zip file
       file:
         path: /tmp/sonar-scanner.zip
         state: absent
 
-    - name: Create job config XML
+    - name: Create Jenkins job configuration XML from template
+      template:
+        src: /home/yugan/job-config.xml.j2
+        dest: /tmp/job-config.xml
+
+    - name: Ensure Jenkins job directory exists
+      file:
+        path: /var/lib/jenkins/jobs/{{ pipeline_job_name }}
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: 0755
+
+    - name: Download Jenkins CLI jar
+      get_url:
+        url: http://{{ jenkins_host }}:8080/jnlpJars/jenkins-cli.jar
+        dest: /tmp/jenkins-cli.jar
+        mode: '0644'
+
+    - name: Upload job configuration XML to Jenkins home directory
       copy:
-        content: |
-          <?xml version='1.0' encoding='UTF-8'?>
-          <project>
-          <flow-definition plugin="workflow-job@2.40">
-              <actions/>
-              <description>An Ansible-created Jenkins pipeline job for GitHub and SonarQube analysis</description>
-              <keepDependencies>false</keepDependencies>
-              <properties/>
-              <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition">
-                  <script>
-                      <![CDATA[
-                      pipeline {
-                          agent any
+        src: /home/yugan/job-config.xml.j2  # Corrected src path
+        dest: /var/lib/jenkins/jobs/{{ pipeline_job_name }}/config.xml
+        owner: jenkins
+        group: jenkins
+        mode: 0644
 
-                          stages {
-                              stage('Checkout') {
-                                  steps {
-                                      script {
-                                          git url: 'https://github.com/BasharNaieem/Login-Page.git', branch: 'main'
-                                      }
-                                  }
-                              }
-                              stage('SonarQube Analysis') {
-                                  steps {
-                                      script {
-                                          echo "Running SonarQube Analysis"
-                                          sh '''
-                                          /usr/local/bin/sonar-scanner \
-                                          -Dsonar.projectKey=your-project-key \
-                                          -Dsonar.sources=. \
-                                          -Dsonar.host.url="your-sonarqube-server-url" \
-                                          -Dsonar.login="your-sonarqube-token"
-                                          '''
-                                      }
-                                  }
-                              }
-                          }
-
-                          post {
-                              always {
-                                  echo 'Pipeline completed!'
-                              }
-                          }
-                      }
-                      ]]>
-                  </script>
-                  <lightweight>true</lightweight>
-              </definition>
-              <triggers/>
-              <disabled>false</disabled>
-          </flow-definition>
-          </project>
-        dest: "{{ job_config_xml_path }}"
-      register: create_xml
-
-    - name: Debug XML file creation
-      debug:
-        var: create_xml
-
-    - name: Create a Jenkins job
+    - name: Create Jenkins pipeline job from XML config
       shell: |
-        curl -X POST -u "{{ username }}:{{ api_token }}" "{{ jenkins_url }}/createItem?name={{ job_name }}" \
-        --header "Content-Type: application/xml" \
-        --data-binary "@{{ job_config_xml_path }}"
-      register: create_job_response
+        java -jar /tmp/jenkins-cli.jar -s http://{{ jenkins_host }}:8080 -auth {{ username }}:{{ password }} create-job {{ pipeline_job_name }} < /tmp/job-config.xml
 
-    - name: Debug job creation response
+    - name: Trigger the Jenkins pipeline job
+      command: >
+        java -jar /tmp/jenkins-cli.jar -s http://{{ jenkins_host }}:8080 -auth {{ username }}:{{ password }} build {{ pipeline_job_name }}
+      register: build_result
+
+    - name: Wait for the Jenkins job to complete
+      uri:
+        url: "http://{{ jenkins_host }}:8080/job/{{ pipeline_job_name }}/lastBuild/api/json"
+        return_content: yes
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: yes
+      register: job_status
+      retries: 20
+      delay: 10
+      until: job_status.json.result is defined
+
+    - name: Retrieve Jenkins build result
       debug:
-        var: create_job_response
-
-    - name: Trigger the Jenkins job build
-      shell: |
-        curl -X POST -u "{{ username }}:{{ api_token }}" "{{ jenkins_url }}/job/{{ job_name }}/build"
-      register: build_job_response
-
-    - name: Debug job build response
-      debug:
-        var: build_job_response
-
-    - name: Verify job creation
-      shell: |
-        curl -u "{{ username }}:{{ api_token }}" "{{ jenkins_url }}/job/{{ job_name }}/api/json"
-      register: verify_job_response
-
-    - name: Display job details
-      debug:
-        msg: "Job {{ job_name }} details: {{ verify_job_response.stdout }}"
-    
- 
+        msg: "The build result for job '{{ pipeline_job_name }}' is: {{ job_status.json.result }}"
